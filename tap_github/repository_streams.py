@@ -20,6 +20,8 @@ from tap_github.schema_objects import (
 )
 from tap_github.scraping import scrape_dependents, scrape_metrics
 
+import re
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -2082,6 +2084,32 @@ class WorkflowRunsStream(GitHubRestStream):
             "repo_id": context["repo_id"] if context else None,
         }
 
+    def get_next_page_token(self, response: requests.Response, previous_token: Any) -> Optional[int]:
+        """Extract the 'next' page number from GitHub's Link header."""
+        link_header = response.headers.get("Link")
+        if not link_header:
+            return None
+    
+        links = dict(
+            (rel.strip(), url.strip("<> "))
+            for url, rel in (
+                part.split("; rel=")
+                for part in link_header.split(",")
+            )
+        )
+        next_url = links.get("next")
+        if next_url:
+            match = re.search(r"[&?]page=(\d+)", next_url)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def get_url_params(self, context: dict | None, next_page_token: int | None) -> dict:
+        params = super().get_url_params(context, next_page_token)
+        params["per_page"] = 100
+        if next_page_token:
+            params["page"] = next_page_token
+        return params
 
 class WorkflowRunJobsStream(GitHubRestStream):
     """Defines 'workflow_run_jobs' stream."""
