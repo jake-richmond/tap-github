@@ -6,7 +6,8 @@ import email.utils
 import inspect
 import random
 import time
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+import requests
+from typing import TYPE_CHECKING, Any, ClassVar, cast, Optional
 from urllib.parse import parse_qs, urlparse
 
 from dateutil.parser import parse
@@ -14,6 +15,7 @@ from nested_lookup import nested_lookup
 from singer_sdk.exceptions import FatalAPIError, RetriableAPIError
 from singer_sdk.helpers.jsonpath import extract_jsonpath
 from singer_sdk.streams import GraphQLStream, RESTStream
+from singer_sdk.pagination import BaseAPIPaginator
 
 from tap_github.authenticator import GitHubTokenAuthenticator
 
@@ -27,6 +29,16 @@ if TYPE_CHECKING:
 
 EMPTY_REPO_ERROR_STATUS = 409
 
+class GitHubLinkPaginator(BaseAPIPaginator):
+    def get_next(self, response: requests.Response) -> Optional[int]:
+        next_link = response.links.get("next", {}).get("url")
+        if not next_link:
+            return None
+        parsed = urlparse(next_link)
+        query = parse_qs(parsed.query)
+        if "page" in query:
+            return int(query["page"][0])
+        return None
 
 class GitHubRestStream(RESTStream):
     """GitHub Rest stream class."""
@@ -68,86 +80,8 @@ class GitHubRestStream(RESTStream):
         headers["User-Agent"] = cast("str", self.config.get("user_agent", "tap-github"))
         return headers
 
-    def get_next_page_token(
-        self,
-        response: requests.Response,
-        previous_token: Any | None,  # noqa: ANN401
-    ) -> Any | None:  # noqa: ANN401
-        """Return a token for identifying next page or None if no more pages."""
-        if (
-            previous_token
-            and self.MAX_RESULTS_LIMIT
-            and not self.use_cursor_pagination
-            and (
-                cast("int", previous_token) * self.MAX_PER_PAGE
-                >= self.MAX_RESULTS_LIMIT
-            )
-        ):
-            return None
-
-        # Leverage header links returned by the GitHub API.
-        if "next" not in response.links:
-            return None
-
-        resp_json = response.json()
-        results = resp_json if isinstance(resp_json, list) else resp_json.get("items")
-
-        # Exit early if the response has no items. ? Maybe duplicative the "next" link check.  # noqa: E501
-        if not results:
-            return None
-
-        # Unfortunately endpoints such as /starred, /stargazers, /events and /pulls do not support  # noqa: E501
-        # the "since" parameter out of the box. So we use a workaround here to exit early.  # noqa: E501
-        # For such streams, we sort by descending dates (most recent first), and paginate  # noqa: E501
-        # "back in time" until we reach records before our "fake_since" parameter.
-        if self.replication_key and self.use_fake_since_parameter:
-            request_parameters = parse_qs(str(urlparse(response.request.url).query))
-            # parse_qs interprets "+" as a space, revert this to keep an aware datetime
-            try:
-                since = (
-                    request_parameters["fake_since"][0].replace(" ", "+")
-                    if "fake_since" in request_parameters
-                    else ""
-                )
-            except IndexError:
-                return None
-
-            direction = (
-                request_parameters["direction"][0]
-                if "direction" in request_parameters
-                else None
-            )
-
-            # commit_timestamp is a constructed key which does not exist in the raw response  # noqa: E501
-            replication_date = (
-                results[-1][self.replication_key]
-                if self.replication_key != "commit_timestamp"
-                else results[-1]["commit"]["committer"]["date"]
-            )
-            # exit early if the replication_date is before our since parameter
-            if (
-                since
-                and direction == "desc"
-                and (parse(replication_date) < parse(since))
-            ):
-                return None
-
-        # Handle cursor-based pagination
-        if self.use_cursor_pagination:
-            parsed_url = urlparse(response.links["next"]["url"])
-            captured_after_value_list = parse_qs(parsed_url.query).get("after")
-            return captured_after_value_list[0] if captured_after_value_list else None
-
-        # Use header links returned by the GitHub API for page-based pagination.
-        parsed_url = urlparse(response.links["next"]["url"])
-        captured_page_value_list = parse_qs(parsed_url.query).get("page")
-        next_page_string = (
-            captured_page_value_list[0] if captured_page_value_list else None
-        )
-        if next_page_string and next_page_string.isdigit():
-            return int(next_page_string)
-
-        return (previous_token or 1) + 1
+    def get_new_paginator(self) -> GitHubLinkPaginator:
+        return GitHubLinkPaginator(start_value=1)
 
     def get_url_params(
         self,
