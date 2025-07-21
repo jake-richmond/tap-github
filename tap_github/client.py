@@ -403,7 +403,7 @@ class GitHubGraphqlStream(GraphQLStream, GitHubRestStream):
         """Return a dictionary of values to be used in URL parameterization."""
         params = dict(context) if context else {}
         params["per_page"] = self.MAX_PER_PAGE
-        if next_page_token:
+        if isinstance(next_page_token, dict):
             params.update(next_page_token)
 
         since = self.get_starting_timestamp(context)
