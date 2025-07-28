@@ -20,6 +20,8 @@ from tap_github.schema_objects import (
 )
 from tap_github.scraping import scrape_dependents, scrape_metrics
 
+from datetime import datetime
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -2725,8 +2727,13 @@ class DeploymentStatusesStream(GitHubRestStream):
 
     def get_url_params(self, context, next_page_token):
         params = super().get_url_params(context, next_page_token)
-        if self.replication_key and self.get_starting_replication_key_value(context):
-            params["since"] = self.get_starting_replication_key_value(context).isoformat()
+        starting_value = self.get_starting_replication_key_value(context)
+    
+        if starting_value:
+            if isinstance(starting_value, datetime):
+                params["since"] = starting_value.isoformat()
+            else:
+                params["since"] = starting_value
         return params
 
 class CustomPropertiesStream(GitHubRestStream):
