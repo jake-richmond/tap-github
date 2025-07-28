@@ -2596,6 +2596,7 @@ class DeploymentsStream(GitHubRestStream):
     parent_stream_type = RepositoryStream
     ignore_parent_replication_key = True
     state_partitioning_keys: ClassVar[list[str]] = ["repo", "org"]
+    replication_key = "updated_at"
 
     schema = th.PropertiesList(
         # Parent Keys
@@ -2657,6 +2658,13 @@ class DeploymentsStream(GitHubRestStream):
             "repo_id": context["repo_id"] if context else None,
         }
 
+    def post_process(self, row: dict, context: dict | None = None) -> dict:
+        """Filter records based on the replication_key if API doesn't support 'since'."""
+        starting_value = self.get_starting_replication_key_value(context)
+        if starting_value and row.get("updated_at"):
+            if row["updated_at"] <= starting_value.isoformat():
+                return None  # Skip records already processed
+        return row
 
 class DeploymentStatusesStream(GitHubRestStream):
     """A stream dedicated to fetching deployment statuses in a repository."""
@@ -2668,6 +2676,7 @@ class DeploymentStatusesStream(GitHubRestStream):
     ignore_parent_replication_key = True
     state_partitioning_keys: ClassVar[list[str]] = ["repo", "org", "deployment_id"]
     tolerated_http_errors: ClassVar[list[int]] = [404]
+    replication_key = "updated_at"
 
     schema = th.PropertiesList(
         # Parent Keys
@@ -2714,6 +2723,11 @@ class DeploymentStatusesStream(GitHubRestStream):
         th.Property("log_url", th.StringType),
     ).to_dict()
 
+    def get_url_params(self, context, next_page_token):
+        params = super().get_url_params(context, next_page_token)
+        if self.replication_key and self.get_starting_replication_key_value(context):
+            params["since"] = self.get_starting_replication_key_value(context).isoformat()
+        return params
 
 class CustomPropertiesStream(GitHubRestStream):
     """Defines 'custom_properties' stream."""
