@@ -2664,8 +2664,8 @@ class DeploymentsStream(GitHubRestStream):
         """Filter records based on the replication_key if API doesn't support 'since'."""
         starting_value = self.get_starting_replication_key_value(context)
         if starting_value and row.get("updated_at"):
-            if row["updated_at"] <= starting_value.isoformat():
-                return None  # Skip records already processed
+            if row["updated_at"] <= starting_value:
+                return None
         return row
 
 class DeploymentStatusesStream(GitHubRestStream):
